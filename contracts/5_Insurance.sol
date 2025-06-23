@@ -5,76 +5,60 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+import "@chainlink/contracts/src/v0.8/ChainlinkClient.sol";
 
 /**
  * @title AgriculturalInsurance
  * @dev Smart contract for agricultural insurance on Avalanche network
  */
-contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable {
+contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, ChainlinkClient {
     
     // Master wallet to receive payments
     address public masterWallet;
     
-    // Insurance package structure
-    struct InsurancePackage {
-        string packageId;
-        string name;
-        uint256 priceAVAX;  // Price in AVAX (wei)
-        uint256 priceUSDC;  // Price in USDC (6 decimals)
-        bool isActive;
+    // Compact location struct
+    struct CompactLocation {
+        int32 lat;
+        int32 lon;
     }
-    
-    // Mapping to store insurance packages
-    mapping(string => InsurancePackage) public insurancePackages;
-    
-    // Mapping to store allowed ERC20 tokens
-    mapping(address => bool) public allowedERC20Tokens;
-    
-    // Events for backend integration
-    event InsurancePackageCreated(
-        string indexed packageId,
-        string name,
-        uint256 priceAVAX,
-        uint256 priceUSDC,
-        bool isActive
-    );
-    
-    event InsurancePackageUpdated(
-        string indexed packageId,
-        string name,
-        uint256 priceAVAX,
-        uint256 priceUSDC,
-        bool isActive
-    );
-    
+
+    CompactLocation[] public locations;
+    mapping(bytes32 => bool) public isActive;
+
     event InsurancePurchased(
         address indexed policyholder,
-        string indexed packageId,
-        uint256 latitude,
-        uint256 longitude,
+        int32 lat,
+        int32 lon,
         uint256 startDate,
-        uint256 endDate,
         uint256 premiumAmount,
         string paymentToken,
         uint256 timestamp
     );
     
-    event MasterWalletChanged(
-        address indexed oldWallet,
-        address indexed newWallet
-    );
+    // Mapping to store allowed ERC20 tokens
+    mapping(address => bool) public allowedERC20Tokens;
     
-    event ERC20TokenAllowed(
-        address indexed tokenAddress,
-        bool allowed
-    );
+    event ERC20TokenAllowed(address indexed tokenAddress, bool allowed);
+    event MasterWalletChanged(address indexed oldWallet, address indexed newWallet);
+    event EmergencyWithdraw(address indexed to, uint256 amount);
+    event EmergencyWithdrawERC20(address indexed token, address indexed to, uint256 amount);
+    event ContractPaused(address indexed by);
+    event ContractUnpaused(address indexed by);
+    
+    // Chainlink oracle config
+    using Chainlink for Chainlink.Request;
+    address private oracle;
+    bytes32 private jobId;
+    uint256 private fee;
+    address private linkToken;
+
+    // Weather data storage
+    mapping(bytes32 => int256) public latestWeatherData; // requestId => weather value
+
+    event WeatherDataRequested(bytes32 indexed requestId, int32 lat, int32 lon);
+    event WeatherDataReceived(bytes32 indexed requestId, int256 weatherValue);
     
     // Modifiers
-    modifier validPackage(string memory packageId) {
-        require(insurancePackages[packageId].isActive, "Package not found or inactive");
-        _;
-    }
-    
     modifier allowedToken(address tokenAddress) {
         require(allowedERC20Tokens[tokenAddress], "ERC20 token not allowed");
         _;
@@ -87,40 +71,34 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable {
         masterWallet = msg.sender;
         
         // Allow USDC by default
-        allowedERC20Tokens[0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E] = true;
+        allowedERC20Tokens[0x5425890298aed601595a70AB815c96711a31Bc65] = true;
     }
     
     /**
      * @dev Purchase insurance with native token (AVAX)
-     * @param packageId ID of the insurance package
-     * @param latitude Latitude coordinate
-     * @param longitude Longitude coordinate
+     * @param lat Latitude coordinate (int32)
+     * @param lon Longitude coordinate (int32)
      * @param startDate Start date of insurance coverage
+     * @param premiumAmount Amount of AVAX to pay
      */
     function purchaseInsuranceWithNative(
-        string memory packageId,
-        uint256 latitude,
-        uint256 longitude,
-        uint256 startDate
-    ) external payable nonReentrant whenNotPaused validPackage(packageId) {
-        require(msg.value == insurancePackages[packageId].priceAVAX, "Incorrect premium amount");
+        int32 lat,
+        int32 lon,
+        uint256 startDate,
+        uint256 premiumAmount
+    ) external payable nonReentrant whenNotPaused {
+        require(premiumAmount > 0, "Premium must be greater than 0");
+        require(msg.value == premiumAmount, "Incorrect premium amount sent");
         require(startDate > block.timestamp, "Start date must be in the future");
-        
-        // Transfer AVAX to master wallet
         (bool success, ) = payable(masterWallet).call{value: msg.value}("");
         require(success, "Failed to transfer AVAX to master wallet");
-        
-        uint256 endDate = startDate + 365 days; // 1 year coverage
-        
-        // Emit event for backend
+        addLocation(lat, lon);
         emit InsurancePurchased(
             msg.sender,
-            packageId,
-            latitude,
-            longitude,
+            lat,
+            lon,
             startDate,
-            endDate,
-            msg.value,
+            premiumAmount,
             "AVAX",
             block.timestamp
         );
@@ -128,69 +106,36 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable {
     
     /**
      * @dev Purchase insurance with ERC20 token
-     * @param packageId ID of the insurance package
      * @param tokenAddress ERC20 token address
-     * @param latitude Latitude coordinate
-     * @param longitude Longitude coordinate
+     * @param lat Latitude coordinate (int32)
+     * @param lon Longitude coordinate (int32)
      * @param startDate Start date of insurance coverage
+     * @param premiumAmount Amount of ERC20 token to pay
      */
     function purchaseInsuranceWithERC20(
-        string memory packageId,
         address tokenAddress,
-        uint256 latitude,
-        uint256 longitude,
-        uint256 startDate
-    ) external nonReentrant whenNotPaused validPackage(packageId) allowedToken(tokenAddress) {
+        int32 lat,
+        int32 lon,
+        uint256 startDate,
+        uint256 premiumAmount
+    ) external nonReentrant whenNotPaused allowedToken(tokenAddress) {
         require(startDate > block.timestamp, "Start date must be in the future");
-        
-        uint256 premiumAmount = insurancePackages[packageId].priceUSDC;
-        
-        // Transfer ERC20 token from user to master wallet
+        require(premiumAmount > 0, "Premium must be greater than 0");
         IERC20 token = IERC20(tokenAddress);
         require(
             token.transferFrom(msg.sender, masterWallet, premiumAmount),
             "ERC20 transfer failed"
         );
-        
-        uint256 endDate = startDate + 365 days; // 1 year coverage
-        
-        // Emit event for backend
+        addLocation(lat, lon);
         emit InsurancePurchased(
             msg.sender,
-            packageId,
-            latitude,
-            longitude,
+            lat,
+            lon,
             startDate,
-            endDate,
             premiumAmount,
             "ERC20",
             block.timestamp
         );
-    }
-    
-    /**
-     * @dev Create or update insurance package (owner only)
-     */
-    function createOrUpdatePackage(
-        string memory packageId,
-        string memory name,
-        uint256 priceAVAX,
-        uint256 priceUSDC,
-        bool isActive
-    ) external onlyOwner {
-        insurancePackages[packageId] = InsurancePackage({
-            packageId: packageId,
-            name: name,
-            priceAVAX: priceAVAX,
-            priceUSDC: priceUSDC,
-            isActive: isActive
-        });
-        
-        if (insurancePackages[packageId].isActive) {
-            emit InsurancePackageCreated(packageId, name, priceAVAX, priceUSDC, isActive);
-        } else {
-            emit InsurancePackageUpdated(packageId, name, priceAVAX, priceUSDC, isActive);
-        }
     }
     
     /**
@@ -212,17 +157,12 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable {
     }
     
     /**
-     * @dev Get insurance package details
+     * @dev Add location and mark as active
      */
-    function getPackage(string memory packageId) external view returns (InsurancePackage memory) {
-        return insurancePackages[packageId];
-    }
-    
-    /**
-     * @dev Check if ERC20 token is allowed
-     */
-    function isERC20TokenAllowed(address tokenAddress) external view returns (bool) {
-        return allowedERC20Tokens[tokenAddress];
+    function addLocation(int32 lat, int32 lon) public {
+        locations.push(CompactLocation(lat, lon));
+        bytes32 key = keccak256(abi.encode(lat, lon));
+        isActive[key] = true;
     }
     
     /**
@@ -230,6 +170,7 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable {
      */
     function pause() external onlyOwner {
         _pause();
+        emit ContractPaused(msg.sender);
     }
     
     /**
@@ -237,6 +178,7 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable {
      */
     function unpause() external onlyOwner {
         _unpause();
+        emit ContractUnpaused(msg.sender);
     }
     
     /**
@@ -245,9 +187,9 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable {
     function emergencyWithdraw() external onlyOwner {
         uint256 balance = address(this).balance;
         require(balance > 0, "No AVAX to withdraw");
-        
         (bool success, ) = payable(owner()).call{value: balance}("");
         require(success, "Failed to withdraw AVAX");
+        emit EmergencyWithdraw(owner(), balance);
     }
     
     /**
@@ -257,8 +199,70 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable {
         IERC20 token = IERC20(tokenAddress);
         uint256 balance = token.balanceOf(address(this));
         require(balance > 0, "No tokens to withdraw");
-        
         require(token.transfer(owner(), balance), "Failed to withdraw tokens");
+        emit EmergencyWithdrawERC20(tokenAddress, owner(), balance);
+    }
+    
+    /**
+     * @dev Set Chainlink oracle config (owner only)
+     */
+    function setChainlinkOracle(
+        address _oracle,
+        bytes32 _jobId,
+        uint256 _fee,
+        address _linkToken
+    ) external onlyOwner {
+        oracle = _oracle;
+        jobId = _jobId;
+        fee = _fee;
+        linkToken = _linkToken;
+        setChainlinkToken(_linkToken);
+    }
+
+    /**
+     * @dev Owner requests weather data for a location
+     */
+    function requestWeatherData(int32 lat, int32 lon) external onlyOwner returns (bytes32 requestId) {
+        require(oracle != address(0), "Oracle not set");
+        Chainlink.Request memory req = buildChainlinkRequest(jobId, address(this), this.fulfillWeatherData.selector);
+        // Example: encode lat/lon as string, adapt to your oracle's API
+        req.add("lat", intToString(lat));
+        req.add("lon", intToString(lon));
+        requestId = sendChainlinkRequestTo(oracle, req, fee);
+        emit WeatherDataRequested(requestId, lat, lon);
+    }
+
+    /**
+     * @dev Chainlink node calls this to fulfill weather data
+     */
+    function fulfillWeatherData(bytes32 _requestId, int256 _weatherValue) public recordChainlinkFulfillment(_requestId) {
+        latestWeatherData[_requestId] = _weatherValue;
+        emit WeatherDataReceived(_requestId, _weatherValue);
+    }
+
+    // Helper: int32 to string
+    function intToString(int32 value) internal pure returns (string memory) {
+        if (value >= 0) {
+            return _toString(uint32(value));
+        } else {
+            return string(abi.encodePacked("-", _toString(uint32(-value))));
+        }
+    }
+    function _toString(uint32 value) internal pure returns (string memory) {
+        if (value == 0) return "0";
+        uint32 temp = value;
+        uint32 digits;
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits -= 1;
+            buffer[digits] = bytes1(uint8(48 + uint32(value % 10)));
+            value /= 10;
+        }
+        return string(buffer);
     }
     
     // Receive function to accept AVAX
