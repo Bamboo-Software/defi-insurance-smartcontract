@@ -24,35 +24,11 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable {
         bool isActive;
     }
     
-    // Insurance policy structure
-    struct InsurancePolicy {
-        uint256 policyId;
-        address policyholder;
-        string packageId;
-        uint256 latitude;
-        uint256 longitude;
-        uint256 startDate;
-        uint256 endDate;
-        uint256 premiumAmount;
-        bool isActive;
-        bool isClaimed;
-        uint256 createdAt;
-    }
-    
     // Mapping to store insurance packages
     mapping(string => InsurancePackage) public insurancePackages;
     
-    // Mapping to store user policies
-    mapping(address => InsurancePolicy[]) public userPolicies;
-    
-    // Mapping to store policy by ID
-    mapping(uint256 => InsurancePolicy) public policies;
-    
     // Mapping to store allowed ERC20 tokens
     mapping(address => bool) public allowedERC20Tokens;
-    
-    // Counter for policy IDs
-    uint256 private _policyIdCounter;
     
     // Events for backend integration
     event InsurancePackageCreated(
@@ -72,7 +48,6 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable {
     );
     
     event InsurancePurchased(
-        uint256 indexed policyId,
         address indexed policyholder,
         string indexed packageId,
         uint256 latitude,
@@ -94,22 +69,9 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable {
         bool allowed
     );
     
-    event ClaimSubmitted(
-        uint256 indexed policyId,
-        address indexed policyholder,
-        uint256 claimAmount,
-        string reason,
-        uint256 timestamp
-    );
-    
     // Modifiers
     modifier validPackage(string memory packageId) {
         require(insurancePackages[packageId].isActive, "Package not found or inactive");
-        _;
-    }
-    
-    modifier validPolicy(uint256 policyId) {
-        require(policies[policyId].policyId != 0, "Policy not found");
         _;
     }
     
@@ -123,7 +85,6 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable {
      */
     constructor() Ownable(msg.sender) {
         masterWallet = msg.sender;
-        _policyIdCounter = 1;
         
         // Allow USDC by default
         allowedERC20Tokens[0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E] = true;
@@ -149,31 +110,10 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable {
         (bool success, ) = payable(masterWallet).call{value: msg.value}("");
         require(success, "Failed to transfer AVAX to master wallet");
         
-        // Create insurance policy
-        uint256 policyId = _policyIdCounter++;
         uint256 endDate = startDate + 365 days; // 1 year coverage
-        
-        InsurancePolicy memory newPolicy = InsurancePolicy({
-            policyId: policyId,
-            policyholder: msg.sender,
-            packageId: packageId,
-            latitude: latitude,
-            longitude: longitude,
-            startDate: startDate,
-            endDate: endDate,
-            premiumAmount: msg.value,
-            isActive: true,
-            isClaimed: false,
-            createdAt: block.timestamp
-        });
-        
-        // Store policy
-        policies[policyId] = newPolicy;
-        userPolicies[msg.sender].push(newPolicy);
         
         // Emit event for backend
         emit InsurancePurchased(
-            policyId,
             msg.sender,
             packageId,
             latitude,
@@ -212,31 +152,10 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable {
             "ERC20 transfer failed"
         );
         
-        // Create insurance policy
-        uint256 policyId = _policyIdCounter++;
         uint256 endDate = startDate + 365 days; // 1 year coverage
-        
-        InsurancePolicy memory newPolicy = InsurancePolicy({
-            policyId: policyId,
-            policyholder: msg.sender,
-            packageId: packageId,
-            latitude: latitude,
-            longitude: longitude,
-            startDate: startDate,
-            endDate: endDate,
-            premiumAmount: premiumAmount,
-            isActive: true,
-            isClaimed: false,
-            createdAt: block.timestamp
-        });
-        
-        // Store policy
-        policies[policyId] = newPolicy;
-        userPolicies[msg.sender].push(newPolicy);
         
         // Emit event for backend
         emit InsurancePurchased(
-            policyId,
             msg.sender,
             packageId,
             latitude,
@@ -267,7 +186,7 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable {
             isActive: isActive
         });
         
-        if (policies[1].policyId == 0) {
+        if (insurancePackages[packageId].isActive) {
             emit InsurancePackageCreated(packageId, name, priceAVAX, priceUSDC, isActive);
         } else {
             emit InsurancePackageUpdated(packageId, name, priceAVAX, priceUSDC, isActive);
@@ -293,53 +212,10 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable {
     }
     
     /**
-     * @dev Submit claim for insurance policy
-     */
-    function submitClaim(uint256 policyId, string memory reason) external validPolicy(policyId) {
-        InsurancePolicy storage policy = policies[policyId];
-        require(policy.policyholder == msg.sender, "Not policy owner");
-        require(policy.isActive, "Policy not active");
-        require(!policy.isClaimed, "Claim already submitted");
-        require(block.timestamp >= policy.startDate, "Insurance not started yet");
-        require(block.timestamp <= policy.endDate, "Insurance expired");
-        
-        policy.isClaimed = true;
-        
-        emit ClaimSubmitted(
-            policyId,
-            msg.sender,
-            policy.premiumAmount,
-            reason,
-            block.timestamp
-        );
-    }
-    
-    /**
-     * @dev Get user's policies
-     */
-    function getUserPolicies(address user) external view returns (InsurancePolicy[] memory) {
-        return userPolicies[user];
-    }
-    
-    /**
-     * @dev Get policy by ID
-     */
-    function getPolicy(uint256 policyId) external view returns (InsurancePolicy memory) {
-        return policies[policyId];
-    }
-    
-    /**
      * @dev Get insurance package details
      */
     function getPackage(string memory packageId) external view returns (InsurancePackage memory) {
         return insurancePackages[packageId];
-    }
-    
-    /**
-     * @dev Get total number of policies
-     */
-    function getTotalPolicies() external view returns (uint256) {
-        return _policyIdCounter - 1;
     }
     
     /**
