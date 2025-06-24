@@ -5,7 +5,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
-import "@chainlink/contracts/src/v0.8/ChainlinkClient.sol";
+import "@chainlink/contracts/src/v0.8/operatorforwarder/ChainlinkClient.sol";
 
 /**
  * @title AgriculturalInsurance
@@ -37,14 +37,7 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, ChainlinkC
     
     // Mapping to store allowed ERC20 tokens
     mapping(address => bool) public allowedERC20Tokens;
-    
-    event ERC20TokenAllowed(address indexed tokenAddress, bool allowed);
-    event MasterWalletChanged(address indexed oldWallet, address indexed newWallet);
-    event EmergencyWithdraw(address indexed to, uint256 amount);
-    event EmergencyWithdrawERC20(address indexed token, address indexed to, uint256 amount);
-    event ContractPaused(address indexed by);
-    event ContractUnpaused(address indexed by);
-    
+
     // Chainlink oracle config
     using Chainlink for Chainlink.Request;
     address private oracle;
@@ -122,6 +115,7 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, ChainlinkC
         require(startDate > block.timestamp, "Start date must be in the future");
         require(premiumAmount > 0, "Premium must be greater than 0");
         IERC20 token = IERC20(tokenAddress);
+        require(token.allowance(msg.sender, address(this)) >= premiumAmount, "Insufficient allowance");
         require(
             token.transferFrom(msg.sender, masterWallet, premiumAmount),
             "ERC20 transfer failed"
@@ -143,7 +137,13 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, ChainlinkC
      */
     function setERC20TokenAllowed(address tokenAddress, bool allowed) external onlyOwner {
         allowedERC20Tokens[tokenAddress] = allowed;
-        emit ERC20TokenAllowed(tokenAddress, allowed);
+    }
+    
+    /**
+     * @dev Check if ERC20 token is allowed
+     */
+    function isTokenAllowed(address tokenAddress) external view returns (bool) {
+        return allowedERC20Tokens[tokenAddress];
     }
     
     /**
@@ -151,9 +151,7 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, ChainlinkC
      */
     function changeMasterWallet(address newMasterWallet) external onlyOwner {
         require(newMasterWallet != address(0), "Invalid master wallet address");
-        address oldWallet = masterWallet;
         masterWallet = newMasterWallet;
-        emit MasterWalletChanged(oldWallet, newMasterWallet);
     }
     
     /**
@@ -170,7 +168,6 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, ChainlinkC
      */
     function pause() external onlyOwner {
         _pause();
-        emit ContractPaused(msg.sender);
     }
     
     /**
@@ -178,7 +175,6 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, ChainlinkC
      */
     function unpause() external onlyOwner {
         _unpause();
-        emit ContractUnpaused(msg.sender);
     }
     
     /**
@@ -189,7 +185,6 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, ChainlinkC
         require(balance > 0, "No AVAX to withdraw");
         (bool success, ) = payable(owner()).call{value: balance}("");
         require(success, "Failed to withdraw AVAX");
-        emit EmergencyWithdraw(owner(), balance);
     }
     
     /**
@@ -200,7 +195,6 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, ChainlinkC
         uint256 balance = token.balanceOf(address(this));
         require(balance > 0, "No tokens to withdraw");
         require(token.transfer(owner(), balance), "Failed to withdraw tokens");
-        emit EmergencyWithdrawERC20(tokenAddress, owner(), balance);
     }
     
     /**
@@ -216,7 +210,7 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, ChainlinkC
         jobId = _jobId;
         fee = _fee;
         linkToken = _linkToken;
-        setChainlinkToken(_linkToken);
+        _setChainlinkToken(_linkToken);
     }
 
     /**
@@ -224,11 +218,11 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, ChainlinkC
      */
     function requestWeatherData(int32 lat, int32 lon) external onlyOwner returns (bytes32 requestId) {
         require(oracle != address(0), "Oracle not set");
-        Chainlink.Request memory req = buildChainlinkRequest(jobId, address(this), this.fulfillWeatherData.selector);
+        Chainlink.Request memory req = _buildChainlinkRequest(jobId, address(this), this.fulfillWeatherData.selector);
         // Example: encode lat/lon as string, adapt to your oracle's API
-        req.add("lat", intToString(lat));
-        req.add("lon", intToString(lon));
-        requestId = sendChainlinkRequestTo(oracle, req, fee);
+        req._add("lat", intToString(lat));
+        req._add("lon", intToString(lon));
+        requestId = _sendChainlinkRequestTo(oracle, req, fee);
         emit WeatherDataRequested(requestId, lat, lon);
     }
 
