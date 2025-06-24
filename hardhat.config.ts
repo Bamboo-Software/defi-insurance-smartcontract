@@ -35,6 +35,19 @@ const config: HardhatUserConfig = {
         },
       },
     ],
+    // apiKey: {
+    //   fuji: "snowscan",
+    // },
+    // customChains: [
+    //   {
+    //     network: "fuji",
+    //     chainId: 43113,
+    //     urls: {
+    //       apiURL: "https://api-testnet.snowscan.xyz/api",
+    //       browserURL: "https://testnet.snowscan.xyz/",
+    //     },
+    //   },
+    // ],
   },
 };
 
