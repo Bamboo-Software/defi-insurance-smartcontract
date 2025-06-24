@@ -22,32 +22,30 @@ const config: HardhatUserConfig = {
     },
   },
   etherscan: {
-    apiKey: {
-      snowtrace: "snowtrace", // apiKey is not required, just set a placeholder
-    },
-    customChains: [
-      {
-        network: "snowtrace",
-        chainId: 43113,
-        urls: {
-          apiURL: "https://api.routescan.io/v2/network/testnet/evm/43113/etherscan",
-          browserURL: "https://avalanche.testnet.localhost:8080",
-        },
-      },
-    ],
     // apiKey: {
-    //   fuji: "snowscan",
+    //   snowtrace: "snowtrace", // apiKey is not required, just set a placeholder
     // },
     // customChains: [
     //   {
-    //     network: "fuji",
+    //     network: "snowtrace",
     //     chainId: 43113,
     //     urls: {
-    //       apiURL: "https://api-testnet.snowscan.xyz/api",
-    //       browserURL: "https://testnet.snowscan.xyz/",
+    //       apiURL: "https://api.routescan.io/v2/network/testnet/evm/43113/etherscan",
+    //       browserURL: "https://avalanche.testnet.localhost:8080",
     //     },
     //   },
     // ],
+    apiKey: "KUQT7R21M97MUC36EUVNKEGQHUD2JE2WD3", // API key v2
+    customChains: [
+      {
+        network: "fuji",
+        chainId: 43113,
+        urls: {
+          apiURL: "https://api-testnet.snowtrace.io/api",
+          browserURL: "https://testnet.snowtrace.io"
+        }
+      }
+    ]
   },
 };
 
