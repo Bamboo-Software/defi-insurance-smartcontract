@@ -88,8 +88,9 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, FunctionsC
     "  },"
     "});"
     "if (apiResponse.error) {"
-    "  console.error('Request failed:', apiResponse.error);"
-    '  throw Error("Request failed");'
+    "  const errorDetails = JSON.stringify(apiResponse, null, 2);"
+    "  console.error('Request failed:', errorDetails);"
+    "  throw Error(`Request failed: ${errorDetails}`);"
     "}"
     "const weather = apiResponse.data?.data?.values;"
     "if (!weather) {"
@@ -244,6 +245,24 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, FunctionsC
     bytes32[] memory keys = abi.decode(performData, (bytes32[]));
     for (uint256 i = 0; i < keys.length; i++) {
       bytes32 key = keys[i];
+      if (isActive[key]) {
+        CompactLocation memory loc = locations[key];
+        string[] memory args = new string[](2);
+        args[0] = loc.lat.intToStringWithDecimal();
+        args[1] = loc.lon.intToStringWithDecimal();
+        bytes32 requestId = sendRequest(args);
+        emit WeatherDataRequested(requestId, loc.lat, loc.lon);
+      }
+    }
+  }
+
+  /**
+   * @dev Fetch weather data for all active locations (for Time-based Upkeep)
+   */
+  function fetchWeatherData() external whenNotPaused {
+    require(subscriptionId != 0, "Subscription ID not set");
+    for (uint256 i = 0; i < locationKeys.length; i++) {
+      bytes32 key = locationKeys[i];
       if (isActive[key]) {
         CompactLocation memory loc = locations[key];
         string[] memory args = new string[](2);
