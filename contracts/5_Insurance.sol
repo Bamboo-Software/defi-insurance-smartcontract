@@ -77,13 +77,13 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, FunctionsC
 
   address router = 0xA9d587a00A31A52Ed70D6026794a8FC5E2F5dCb0;
   string source =
-    "const lat = args[0];"
-    "const lon = args[1];"
+    "const lat = parseFloat(args[0]);"
+    "const lng = parseFloat(args[1]);"
     "const apiKey = 'g4u1LPihSPyhQ8GNqnCapQ6LOPQE3W1D';"
     "const apiResponse = await Functions.makeHttpRequest({"
     "  url: `https://api.tomorrow.io/v4/weather/realtime`,"
     "  params: {"
-    "    location: `${lat},${lon}`,"
+    "    location: `${lat},${lng}`,"
     "    apikey: apiKey,"
     "  },"
     "});"
@@ -97,6 +97,8 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, FunctionsC
     '  throw Error("No weather data received");'
     "}"
     "const essentialData = {"
+    "  lat,"
+    "  lng,"
     "  temperature: weather.temperature,"
     "  rainIntensity: weather.rainIntensity,"
     "  precipitationProbability: weather.precipitationProbability,"
