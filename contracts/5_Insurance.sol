@@ -6,6 +6,9 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@chainlink/contracts/src/v0.8/operatorforwarder/ChainlinkClient.sol";
+import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/FunctionsClient.sol";
+import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
+import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/libraries/FunctionsRequest.sol";
 
 using Chainlink for Chainlink.Request;
 
@@ -13,8 +16,73 @@ using Chainlink for Chainlink.Request;
  * @title AgriculturalInsurance
  * @dev Smart contract for agricultural insurance on Avalanche network
  */
-contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, ChainlinkClient {
-    
+contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, ChainlinkClient, FunctionsClient, ConfirmedOwner {
+    using FunctionsRequest for FunctionsRequest.Request;
+
+    // State variables to store the last request ID, response, and error
+    bytes32 public s_lastRequestId;
+    bytes public s_lastResponse;
+    bytes public s_lastError;
+
+    // Custom error type
+    error UnexpectedRequestID(bytes32 requestId);
+
+    // Event to log responses
+    event WeatherResponse(
+        bytes32 indexed requestId,
+        string character,
+        bytes response,
+        bytes err
+    );
+
+    // Router address - Hardcoded for Sepolia
+    // Check to get the router address for your supported network https://docs.chain.link/chainlink-functions/supported-networks
+    address router = 0xA9d587a00A31A52Ed70D6026794a8FC5E2F5dCb0;
+
+    // JavaScript source code
+    // Fetch character name from the Star Wars API.
+    // Documentation: https://swapi.info/people
+    string source = 
+        "const lat = args[0];"
+        "const lon = args[1];"
+        "const apiKey = secrets.apiKey;"
+        "const apiResponse = await Functions.makeHttpRequest({"
+        "  url: `https://api.tomorrow.io/v4/weather/realtime`,"
+        "  params: {"
+        "    location: `${lat},${lon}`,"
+        "    apikey: apiKey,"
+        "  },"
+        "});"
+        "if (apiResponse.error) {"
+        "  console.error('Request failed:', apiResponse.error);"
+        "  throw Error(\"Request failed\");"
+        "}"
+        "const weather = apiResponse.data?.data?.values;"
+        "if (!weather) {"
+        "  throw Error(\"No weather data received\");"
+        "}"
+        "const essentialData = {"
+        "  temperature: weather.temperature,"
+        "  rainIntensity: weather.rainIntensity,"
+        "  precipitationProbability: weather.precipitationProbability,"
+        "  humidity: weather.humidity,"
+        "  windSpeed: weather.windSpeed,"
+        "  timestamp: apiResponse.data?.data?.time,"
+        "};"
+        "console.log('✅ Weather data:', JSON.stringify(essentialData, null, 2));"
+        "return Functions.encodeString(JSON.stringify(essentialData));";
+
+    //Callback gas limit
+    uint32 gasLimit = 300000;
+
+    // donID - Hardcoded for Sepolia
+    // Check to get the donID for your supported network https://docs.chain.link/chainlink-functions/supported-networks
+    bytes32 donID =
+        0x66756e2d6176616c616e6368652d66756a692d31000000000000000000000000;
+
+    // State variable to store the returned character information
+    string public character;
+
     // Master wallet to receive payments
     address public masterWallet;
     
@@ -68,7 +136,7 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, ChainlinkC
     /**
      * @dev Constructor sets the deployer as owner and master wallet
      */
-    constructor() Ownable(msg.sender) {
+    constructor() FunctionsClient(router) ConfirmedOwner(msg.sender) Ownable(msg.sender) {
         masterWallet = msg.sender;
         
         // Allow USDC by default
@@ -238,67 +306,114 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, ChainlinkC
         require(token.transfer(owner(), amount), "Failed to withdraw tokens");
         emit EmergencyWithdraw(owner(), amount, "ERC20");
     }
+
+    /**
+     * @notice Sends an HTTP request for character information
+     * @param subscriptionId The ID for the Chainlink subscription
+     * @param args The arguments to pass to the HTTP request
+     * @return requestId The ID of the request
+     */
+    function sendRequest(
+        uint64 subscriptionId,
+        string[] calldata args
+    ) external onlyOwner returns (bytes32 requestId) {
+        FunctionsRequest.Request memory req;
+        req.initializeRequestForInlineJavaScript(source); // Initialize the request with JS code
+        if (args.length > 0) req.setArgs(args); // Set the arguments for the request
+
+        // Send the request and store the request ID
+        s_lastRequestId = _sendRequest(
+            req.encodeCBOR(),
+            subscriptionId,
+            gasLimit,
+            donID
+        );
+
+        return s_lastRequestId;
+    }
+
+    /**
+     * @notice Callback function for fulfilling a request
+     * @param requestId The ID of the request to fulfill
+     * @param response The HTTP response data
+     * @param err Any errors from the Functions request
+     */
+    function fulfillRequest(
+        bytes32 requestId,
+        bytes memory response,
+        bytes memory err
+    ) internal override {
+        if (s_lastRequestId != requestId) {
+            revert UnexpectedRequestID(requestId); // Check if request IDs match
+        }
+        // Update the contract's state variables with the response and any errors
+        s_lastResponse = response;
+        character = string(response);
+        s_lastError = err;
+
+        // Emit an event to log the response
+        emit WeatherResponse(requestId, character, s_lastResponse, s_lastError);
+    }
     
-    /**
-     * @dev Set Chainlink oracle config (owner only)
-     */
-    function setChainlinkOracle(
-        address _oracle,
-        bytes32 _jobId,
-        uint256 _fee,
-        address _linkToken
-    ) external onlyOwner {
-        oracle = _oracle;
-        jobId = _jobId;
-        fee = _fee;
-        linkToken = _linkToken;
-        _setChainlinkToken(_linkToken);
-        emit Log(LogType.INFO, string(abi.encodePacked("Chainlink oracle set: ", _oracle, " ", _jobId, " ", _fee, " ", _linkToken)));
-    }
+    //! Chainlink Oracle
+    // /**
+    //  * @dev Set Chainlink oracle config (owner only)
+    //  */
+    // function setChainlinkOracle(
+    //     address _oracle,
+    //     bytes32 _jobId,
+    //     uint256 _fee,
+    //     address _linkToken
+    // ) external onlyOwner {
+    //     oracle = _oracle;
+    //     jobId = _jobId;
+    //     fee = _fee;
+    //     linkToken = _linkToken;
+    //     _setChainlinkToken(_linkToken);
+    //     emit Log(LogType.INFO, string(abi.encodePacked("Chainlink oracle set: ", _oracle, " ", _jobId, " ", _fee, " ", _linkToken)));
+    // }
 
-    /**
-     * @dev Owner requests weather data for a location
-     */
-    function requestWeatherData(int32 lat, int32 lon) external onlyOwner returns (bytes32 requestId) {
-        bytes32 key = keccak256(abi.encode(lat, lon));
-        emit Log(LogType.INFO, string(abi.encodePacked("Key: ", key)));
-
-        require(isActive[key], "Location not registered");
+    // /**
+    //  * @dev Owner requests weather data for a location
+    //  */
+    // function requestWeatherData(int32 lat, int32 lon) external onlyOwner returns (bytes32 requestId) {
+    //     bytes32 key = keccak256(abi.encode(lat, lon));
+    //     require(isActive[key], "Location not registered");
         
-        if (oracle == address(0)) {
-            emit Log(LogType.ERROR, "Invalid oracle address");
-            revert("Oracle not set");
-        }
-        if (linkToken == address(0)) {
-            emit Log(LogType.ERROR, "Link token not set");
-            revert("Link token not set");
-        }
-        IERC20 link = IERC20(linkToken);
-        if (link.balanceOf(address(this)) < fee) {
-            emit Log(LogType.ERROR, "Insufficient LINK balance");
-            revert("Insufficient LINK balance");
-        }
+    //     if (oracle == address(0)) {
+    //         emit Log(LogType.ERROR, "Invalid oracle address");
+    //         revert("Oracle not set");
+    //     }
+    //     if (linkToken == address(0)) {
+    //         emit Log(LogType.ERROR, "Link token not set");
+    //         revert("Link token not set");
+    //     }
+    //     IERC20 link = IERC20(linkToken);
+    //     if (link.balanceOf(address(this)) < fee) {
+    //         emit Log(LogType.ERROR, "Insufficient LINK balance");
+    //         revert("Insufficient LINK balance");
+    //     }
 
-        emit Log(LogType.INFO, string(abi.encodePacked("Oracle: ", oracle)));
+    //     emit Log(LogType.INFO, string(abi.encodePacked("Oracle: ", oracle)));
 
-        Chainlink.Request memory request = _buildChainlinkRequest(jobId, address(this), this.fulfillWeatherData.selector);
-        request._add("lat", intToStringWithDecimal(lat));
-        request._add("lon", intToStringWithDecimal(lon));
+    //     Chainlink.Request memory request = _buildChainlinkRequest(jobId, address(this), this.fulfillWeatherData.selector);
+    //     request._add("lat", intToStringWithDecimal(lat));
+    //     request._add("lon", intToStringWithDecimal(lon));
 
-        // Send Chainlink request
-        requestId = _sendChainlinkRequestTo(oracle, request, fee);
-        emit WeatherDataRequested(requestId, lat, lon);
-    }
+    //     // Send Chainlink request
+    //     requestId = _sendChainlinkRequestTo(oracle, request, fee);
+    //     emit WeatherDataRequested(requestId, lat, lon);
+    // }
 
-    /**
-     * @dev Chainlink node calls this to fulfill weather data
-     */
-    function fulfillWeatherData(bytes32 requestId, int256 weatherValue, int32 lat, int32 lon) 
-        public recordChainlinkFulfillment(requestId) {
-        bytes32 locationKey = keccak256(abi.encode(lat, lon));
-        weatherDataByLocation[locationKey][requestId] = weatherValue;
-        emit WeatherDataReceived(requestId, weatherValue);
-    }
+    // /**
+    //  * @dev Chainlink node calls this to fulfill weather data
+    //  */
+    // function fulfillWeatherData(bytes32 requestId, int256 weatherValue, int32 lat, int32 lon) 
+    //     public recordChainlinkFulfillment(requestId) {
+    //     bytes32 locationKey = keccak256(abi.encode(lat, lon));
+    //     weatherDataByLocation[locationKey][requestId] = weatherValue;
+    //     emit WeatherDataReceived(requestId, weatherValue);
+    // }
 
     function intToStringWithDecimal(int32 _value) internal pure returns (string memory) {
         if (_value == 0) return "0.000000";
