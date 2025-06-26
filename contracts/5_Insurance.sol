@@ -79,7 +79,7 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, FunctionsC
   string source =
     "const lat = parseFloat(args[0]);"
     "const lng = parseFloat(args[1]);"
-    "const apiKey = 'g4u1LPihSPyhQ8GNqnCapQ6LOPQE3W1D';"
+    "const apiKey = '3fphyWwq46y28GTX9a6yDwS2lKEUpuBI';"
     "const apiResponse = await Functions.makeHttpRequest({"
     "  url: `https://api.tomorrow.io/v4/weather/realtime`,"
     "  params: {"
