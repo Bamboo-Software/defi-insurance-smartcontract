@@ -58,7 +58,7 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, FunctionsC
 
   error UnexpectedRequestID(bytes32 requestId);
 
-  event WeatherResponse(bytes32 indexed requestId, string character, bytes response, bytes err);
+  event WeatherResponse(bytes32 indexed requestId, bytes response);
   event InsurancePurchased(
     address indexed user,
     string packageId,
@@ -156,8 +156,10 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, FunctionsC
     require(premiumAmount > 0, "Premium must be greater than 0");
     require(msg.value == premiumAmount, "Incorrect amount sent");
     require(startDate > block.timestamp, "Start date must be in future");
-    (bool sent, ) = masterWallet.call{ value: msg.value }("");
-    require(sent, "Failed to send AVAX");
+    // (bool sent, ) = masterWallet.call{ value: msg.value }("");
+    // require(sent, "Failed to send AVAX");
+
+    // Giữ lại AVAX trong contract, không chuyển đi đâu cả
     addLocation(lat, lon);
     emit InsurancePurchased(msg.sender, packageId, address(0), msg.value, lat, lon, startDate, "AVAX", block.timestamp);
   }
@@ -183,7 +185,10 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, FunctionsC
     require(premiumAmount > 0, "Premium must be greater than 0");
     IERC20 token = IERC20(tokenAddress);
     require(token.allowance(msg.sender, address(this)) >= premiumAmount, "Insufficient allowance");
-    require(token.transferFrom(msg.sender, masterWallet, premiumAmount), "ERC20 transfer failed");
+    // require(token.transferFrom(msg.sender, masterWallet, premiumAmount), "ERC20 transfer failed");
+    require(token.transferFrom(msg.sender, address(this), premiumAmount), "ERC20 transfer failed");
+
+    // Giữ lại token trong contract, không chuyển đi đâu cả
     addLocation(lat, lon);
     emit InsurancePurchased(
       msg.sender,
@@ -222,10 +227,11 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, FunctionsC
     if (s_lastRequestId != requestId) {
       revert UnexpectedRequestID(requestId);
     }
-    s_lastResponse = response;
-    character = string(response);
-    s_lastError = err;
-    emit WeatherResponse(requestId, character, s_lastResponse, s_lastError);
+    // Không lưu storage nếu không cần dùng lại
+    // s_lastResponse = response;
+    // s_lastError = err;
+
+    emit WeatherResponse(requestId, response);
   }
 
   /**
@@ -423,7 +429,5 @@ contract AgriculturalInsurance is Ownable, ReentrancyGuard, Pausable, FunctionsC
     _unpause();
   }
 
-  receive() external payable {
-    revert("Use purchase function");
-  }
+  receive() external payable {}
 }
