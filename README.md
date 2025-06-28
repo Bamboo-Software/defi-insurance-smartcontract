@@ -1,7 +1,7 @@
 # Defi Insurance Smart Contracts
 
 <p align="center">
-  <a href="https://hardhat.org/" target="blank"><img src="https://images.seeklogo.com/logo-png/42/1/hardhat-logo-png_seeklogo-426726.png" width="120" alt="Hardhat Logo" /></a>
+  <a href="https://defi-insurance.bamboosoft.io/" target="blank"><img src="https://chromion-chainlink-hackathon.devfolio.co/_next/image?url=https%3A%2F%2Fassets.devfolio.co%2Fhackathons%2Fchromion-chainlink-hackathon%2Fprojects%2F243a76646b5e4cd985079d6224f91f94%2F00ee85a9-3c4e-4f96-87e9-cdd0f08a6d57.png&w=128&q=75" width="120" alt="Defi Insur Logo" /></a>
 </p>
 
 ## Overview
@@ -56,8 +56,8 @@ If you don't have Node.js or npm installed, follow these steps:
 
 #### 2. Clone the repository and install dependencies
 ```bash
-git clone <your-repo-url>
-cd <project-folder>
+git clone https://github.com/Bamboo-Software/defi-insurance-smartcontract
+cd defi-insurance-smartcontract
 npm install
 # or
 yarn install
@@ -118,9 +118,9 @@ This project is open source and community-driven. For questions and support:
 - [Avalanche Discord](https://chat.avax.network/)
 
 ## Stay in touch
-- Author: [Your Name or Team]
-- Project Website: [Add your project site if available]
-- Twitter: [Add your Twitter handle]
+- Website - [https://defi-insurance.bamboosoft.io/](https://defi-insurance.bamboosoft.io/)
+- Author - Dong Khong Minh, Hoang Nguyen Van, Loi Phan Van, Cuong Tran Xuan
+- Team website: https://bamboosoft.io/
 
 ## License
 
